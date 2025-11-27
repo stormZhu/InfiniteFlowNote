@@ -18,7 +18,9 @@ import {
   Heading2,
   FileText,
   X,
-  Network
+  Network,
+  PanelLeftClose,
+  PanelLeftOpen
 } from 'lucide-react';
 
 export { 
@@ -41,5 +43,7 @@ export {
   Heading2,
   FileText,
   X,
-  Network
+  Network,
+  PanelLeftClose,
+  PanelLeftOpen
 };
