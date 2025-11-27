@@ -1,6 +1,7 @@
 import React, { memo, useState, useRef, useEffect, useCallback } from 'react';
 import { Handle, Position, NodeProps, useReactFlow } from 'reactflow';
-import { FileText } from './ui/Icons';
+import { FileText, Network, ArrowRight, ArrowLeft, ArrowDown, ArrowUp, List } from './ui/Icons';
+import { LayoutDirection } from '../types';
 
 // Custom Node Component
 const MindMapNode = ({ data, id, isConnectable }: NodeProps) => {
@@ -23,6 +24,7 @@ const MindMapNode = ({ data, id, isConnectable }: NodeProps) => {
   }, [isEditing]);
 
   const hasNote = data.note && data.note.trim().length > 0 && data.note !== '<br>';
+  const layoutType = data.layoutType as LayoutDirection | undefined;
 
   const handleDoubleClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation(); // Prevent canvas events
@@ -49,6 +51,17 @@ const MindMapNode = ({ data, id, isConnectable }: NodeProps) => {
     }
   }, [onSave]);
 
+  const getLayoutIcon = () => {
+    switch(layoutType) {
+      case 'horizontal-right': return <ArrowRight size={12} />;
+      case 'horizontal-left': return <ArrowLeft size={12} />;
+      case 'vertical-down': return <Network size={12} className="rotate-180" />; // Or ArrowDown
+      case 'vertical-up': return <ArrowUp size={12} />;
+      case 'vertical-stack': return <List size={12} />;
+      default: return null;
+    }
+  };
+
   return (
     <div className="group relative">
       {/* Node Content */}
@@ -57,6 +70,7 @@ const MindMapNode = ({ data, id, isConnectable }: NodeProps) => {
           px-4 py-3 rounded-lg shadow-sm border bg-white
           transition-all duration-200 
           ${hasNote ? 'border-l-4 border-l-blue-500' : 'border-slate-200'}
+          ${layoutType ? 'ring-1 ring-blue-200' : ''}
           hover:shadow-md hover:border-blue-300 min-w-[150px]
         `}
         onDoubleClick={handleDoubleClick}
@@ -78,12 +92,17 @@ const MindMapNode = ({ data, id, isConnectable }: NodeProps) => {
               </span>
             )}
             
-            {hasNote && (
-              <FileText size={14} className="text-blue-500 shrink-0" />
-            )}
+            <div className="flex items-center gap-1">
+                {layoutType && (
+                    <div className="text-slate-400 bg-slate-50 p-0.5 rounded border border-slate-100" title={`Layout: ${layoutType}`}>
+                        {getLayoutIcon()}
+                    </div>
+                )}
+                {hasNote && (
+                <FileText size={14} className="text-blue-500 shrink-0" />
+                )}
+            </div>
         </div>
-        
-        {/* Tooltip removed */}
       </div>
 
       {/* Handles */}

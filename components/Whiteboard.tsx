@@ -31,7 +31,7 @@ interface WhiteboardProps {
 const WhiteboardInner: React.FC<WhiteboardProps> = ({ file, onSave, onNodeClick }) => {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
-  const { project, screenToFlowPosition, getNodes, getEdges } = useReactFlow();
+  const { project, screenToFlowPosition, getNodes } = useReactFlow();
   const fileIdRef = useRef(file.id);
   
   // Double click detection on pane
@@ -55,261 +55,240 @@ const WhiteboardInner: React.FC<WhiteboardProps> = ({ file, onSave, onNodeClick 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [file.id, file.content]);
 
-  // --- Layout Engine ---
+  // --- Layout Engine (Recursive Box Model) ---
+  
+  const NODE_WIDTH = 180;
+  const NODE_HEIGHT = 50;
+  const GAP_X = 50;
+  const GAP_Y = 20;
 
-  const getSubtree = useCallback((nodeId: string, allNodes: Node[], allEdges: Edge[]) => {
-    const children: string[] = [];
-    const stack = [nodeId];
-    const visited = new Set<string>();
-    
-    while (stack.length > 0) {
-      const current = stack.pop()!;
-      if (visited.has(current)) continue;
-      visited.add(current);
-      if (current !== nodeId) children.push(current);
+  // Helper to build the tree structure for a layout group
+  // Returns a tree node with dimensions and children
+  interface LayoutNode {
+    id: string;
+    width: number;
+    height: number;
+    children: LayoutNode[];
+    node: Node;
+  }
 
-      const outGoingEdges = allEdges.filter(e => e.source === current);
-      outGoingEdges.forEach(e => stack.push(e.target));
-    }
-    return children;
-  }, []);
-
-  // Recursive layout calculator returning box size { width, height }
-  const calculateLayout = useCallback((nodeId: string, direction: LayoutDirection, allNodes: Node[], allEdges: Edge[], visited: Set<string> = new Set()): { width: number, height: number } => {
-    if (visited.has(nodeId)) return { width: 0, height: 0 };
+  const buildLayoutTree = useCallback((nodeId: string, layoutType: LayoutDirection, allNodes: Node[], allEdges: Edge[], visited: Set<string>): LayoutNode | null => {
+    if (visited.has(nodeId)) return null;
     visited.add(nodeId);
 
     const node = allNodes.find(n => n.id === nodeId);
-    if (!node) return { width: 0, height: 0 };
+    if (!node) return null;
 
-    // Get direct children
+    // Find children connected by outgoing edges
     const childEdges = allEdges.filter(e => e.source === nodeId);
     const childIds = childEdges.map(e => e.target);
 
-    // Node dimensions (approximate or based on data if we had it, strictly visual estimation here)
-    const NODE_WIDTH = 180;
-    const NODE_HEIGHT = 50;
-    const GAP_X = 50;
-    const GAP_Y = 20;
-
-    if (childIds.length === 0) {
-        return { width: NODE_WIDTH, height: NODE_HEIGHT };
+    const children: LayoutNode[] = [];
+    for (const childId of childIds) {
+        const childNode = allNodes.find(n => n.id === childId);
+        // CRITICAL RULE: If a child has its own layoutType, it breaks the chain. 
+        // We do not position it (it is independent), so we skip it in the tree build.
+        if (childNode && !childNode.data.layoutType) {
+            const childTree = buildLayoutTree(childId, layoutType, allNodes, allEdges, visited);
+            if (childTree) children.push(childTree);
+        }
     }
 
-    let totalWidth = 0;
-    let totalHeight = 0;
+    // Calculate dimensions based on children
+    let width = NODE_WIDTH;
+    let height = NODE_HEIGHT;
 
-    switch (direction) {
-      case 'horizontal-right': {
-        let currentY = 0;
-        const childSizes = childIds.map(childId => {
-            // Children inherit layout unless they have their own
-            const childNode = allNodes.find(n => n.id === childId);
-            const childDir = childNode?.data?.layoutType || direction;
-            return calculateLayout(childId, childDir, allNodes, allEdges, visited);
-        });
-
-        const childrenTotalHeight = childSizes.reduce((acc, size) => acc + size.height, 0) + (childIds.length - 1) * GAP_Y;
-        
-        // Start positioning children centered relative to parent vertically
-        let startY = -childrenTotalHeight / 2 + NODE_HEIGHT / 2;
-        
-        childIds.forEach((childId, index) => {
-            const childNode = allNodes.find(n => n.id === childId);
-            if (childNode) {
-                const size = childSizes[index];
-                // Center child content vertically in its slot
-                const childCenterY = startY + size.height / 2 - NODE_HEIGHT / 2;
-                
-                // Position relative to parent
-                childNode.position = {
-                    x: NODE_WIDTH + GAP_X,
-                    y: childCenterY
-                };
-                startY += size.height + GAP_Y;
-            }
-        });
-
-        return { 
-            width: NODE_WIDTH + GAP_X + Math.max(...childSizes.map(s => s.width)), 
-            height: Math.max(NODE_HEIGHT, childrenTotalHeight) 
-        };
-      }
-      case 'horizontal-left': {
-        const childSizes = childIds.map(childId => {
-            const childNode = allNodes.find(n => n.id === childId);
-            const childDir = childNode?.data?.layoutType || direction;
-            return calculateLayout(childId, childDir, allNodes, allEdges, visited);
-        });
-
-        const childrenTotalHeight = childSizes.reduce((acc, size) => acc + size.height, 0) + (childIds.length - 1) * GAP_Y;
-        let startY = -childrenTotalHeight / 2 + NODE_HEIGHT / 2;
-        
-        childIds.forEach((childId, index) => {
-            const childNode = allNodes.find(n => n.id === childId);
-            if (childNode) {
-                const size = childSizes[index];
-                const childCenterY = startY + size.height / 2 - NODE_HEIGHT / 2;
-                childNode.position = {
-                    x: -(NODE_WIDTH + GAP_X),
-                    y: childCenterY
-                };
-                startY += size.height + GAP_Y;
-            }
-        });
-
-        return { 
-            width: NODE_WIDTH + GAP_X + Math.max(...childSizes.map(s => s.width)), 
-            height: Math.max(NODE_HEIGHT, childrenTotalHeight) 
-        };
-      }
-      case 'vertical-down': {
-        const childSizes = childIds.map(childId => {
-            const childNode = allNodes.find(n => n.id === childId);
-            const childDir = childNode?.data?.layoutType || direction;
-            return calculateLayout(childId, childDir, allNodes, allEdges, visited);
-        });
-
-        const childrenTotalWidth = childSizes.reduce((acc, size) => acc + size.width, 0) + (childIds.length - 1) * GAP_X;
-        let startX = -childrenTotalWidth / 2 + NODE_WIDTH / 2;
-
-        childIds.forEach((childId, index) => {
-            const childNode = allNodes.find(n => n.id === childId);
-            if (childNode) {
-                const size = childSizes[index];
-                // Center child horizontally
-                const childCenterX = startX + size.width / 2 - NODE_WIDTH / 2;
-                
-                childNode.position = {
-                    x: childCenterX,
-                    y: NODE_HEIGHT + GAP_Y
-                };
-                startX += size.width + GAP_X;
-            }
-        });
-
-        return {
-            width: Math.max(NODE_WIDTH, childrenTotalWidth),
-            height: NODE_HEIGHT + GAP_Y + Math.max(...childSizes.map(s => s.height))
-        };
-      }
-      case 'vertical-up': {
-        const childSizes = childIds.map(childId => {
-            const childNode = allNodes.find(n => n.id === childId);
-            const childDir = childNode?.data?.layoutType || direction;
-            return calculateLayout(childId, childDir, allNodes, allEdges, visited);
-        });
-
-        const childrenTotalWidth = childSizes.reduce((acc, size) => acc + size.width, 0) + (childIds.length - 1) * GAP_X;
-        let startX = -childrenTotalWidth / 2 + NODE_WIDTH / 2;
-
-        childIds.forEach((childId, index) => {
-            const childNode = allNodes.find(n => n.id === childId);
-            if (childNode) {
-                const size = childSizes[index];
-                const childCenterX = startX + size.width / 2 - NODE_WIDTH / 2;
-                childNode.position = {
-                    x: childCenterX,
-                    y: -(NODE_HEIGHT + GAP_Y)
-                };
-                startX += size.width + GAP_X;
-            }
-        });
-
-        return {
-            width: Math.max(NODE_WIDTH, childrenTotalWidth),
-            height: NODE_HEIGHT + GAP_Y + Math.max(...childSizes.map(s => s.height))
-        };
-      }
-      case 'vertical-stack': {
-         // Simple list
-         let currentY = NODE_HEIGHT + GAP_Y;
-         childIds.forEach((childId) => {
-            const childNode = allNodes.find(n => n.id === childId);
-            if (childNode) {
-                // Determine child height recursively to stack properly
-                const childDir = childNode.data?.layoutType || direction;
-                // We restart visited for size calc to ensure we measure them, but we don't want to re-position them yet?
-                // Actually single pass is enough if we trust the return value
-                // To avoid infinite loops in visited set, we clone it or trust the main flow
-                // For stack, we just stack them vertically centered
-                childNode.position = {
-                    x: 0, 
-                    y: currentY
-                };
-                
-                // Recurse to position grandchilden
-                const size = calculateLayout(childId, childDir, allNodes, allEdges, visited);
-                currentY += size.height + GAP_Y/2; // tighter gap for stack
-            }
-         });
-         return { width: NODE_WIDTH, height: currentY };
-      }
-      default:
-        return { width: NODE_WIDTH, height: NODE_HEIGHT };
+    if (children.length > 0) {
+        if (layoutType === 'horizontal-right' || layoutType === 'horizontal-left') {
+             // Stack children vertically
+             const childrenHeight = children.reduce((acc, c) => acc + c.height, 0) + (children.length - 1) * GAP_Y;
+             const childrenWidth = Math.max(...children.map(c => c.width));
+             height = Math.max(NODE_HEIGHT, childrenHeight);
+             width = NODE_WIDTH + GAP_X + childrenWidth;
+        } else if (layoutType === 'vertical-down' || layoutType === 'vertical-up') {
+             // Stack children horizontally
+             const childrenWidth = children.reduce((acc, c) => acc + c.width, 0) + (children.length - 1) * GAP_X;
+             const childrenHeight = Math.max(...children.map(c => c.height));
+             width = Math.max(NODE_WIDTH, childrenWidth);
+             height = NODE_HEIGHT + GAP_Y + childrenHeight;
+        } else if (layoutType === 'vertical-stack') {
+             // Simple list stack
+             const childrenHeight = children.reduce((acc, c) => acc + c.height, 0) + (children.length - 1) * (GAP_Y / 2);
+             height = NODE_HEIGHT + (GAP_Y/2) + childrenHeight;
+        }
     }
+
+    return { id: nodeId, width, height, children, node };
   }, []);
+
+  // Recursive function to apply absolute positions based on calculated dimensions
+  const applyPositions = useCallback((
+      treeNode: LayoutNode, 
+      x: number, 
+      y: number, 
+      layoutType: LayoutDirection, 
+      result: Map<string, {x: number, y: number}>
+  ) => {
+      // Store the calculated position for this node
+      result.set(treeNode.id, { x, y });
+
+      if (treeNode.children.length === 0) return;
+
+      if (layoutType === 'horizontal-right') {
+          const childrenTotalHeight = treeNode.children.reduce((acc, c) => acc + c.height, 0) + (treeNode.children.length - 1) * GAP_Y;
+          let currentY = y - childrenTotalHeight / 2 + treeNode.children[0].height / 2; // Center based on first child center? No, center block
+          
+          // Better centering: Start at Y - half total height + half node height?
+          // We want the children block to be centered vertically relative to the parent center.
+          // Parent center Y is y + NODE_HEIGHT/2.
+          const parentCenterY = y + NODE_HEIGHT / 2;
+          let startY = parentCenterY - childrenTotalHeight / 2;
+
+          treeNode.children.forEach(child => {
+              // The child's Y position should be such that its "center" aligns with currentY
+              // But our recursive logic treats x,y as top-left of the bounding box of the child tree?
+              // No, let's treat x,y as top-left of the Node itself.
+              
+              // We place the child NODE at (parentX + offset, currentY_centered).
+              // We need to account that the child node itself might be small, but its subtree is huge.
+              // The `child.height` is the subtree height. 
+              // We want to align the vertical center of the child's subtree with the vertical center of the slot.
+              
+              const childSubtreeCenterY = startY + child.height / 2;
+              const childNodeY = childSubtreeCenterY - NODE_HEIGHT / 2;
+              
+              applyPositions(child, x + NODE_WIDTH + GAP_X, childNodeY, layoutType, result);
+              startY += child.height + GAP_Y;
+          });
+      } 
+      else if (layoutType === 'horizontal-left') {
+          const childrenTotalHeight = treeNode.children.reduce((acc, c) => acc + c.height, 0) + (treeNode.children.length - 1) * GAP_Y;
+          const parentCenterY = y + NODE_HEIGHT / 2;
+          let startY = parentCenterY - childrenTotalHeight / 2;
+
+          treeNode.children.forEach(child => {
+              const childSubtreeCenterY = startY + child.height / 2;
+              const childNodeY = childSubtreeCenterY - NODE_HEIGHT / 2;
+              
+              applyPositions(child, x - (NODE_WIDTH + GAP_X), childNodeY, layoutType, result);
+              startY += child.height + GAP_Y;
+          });
+      }
+      else if (layoutType === 'vertical-down') {
+          const childrenTotalWidth = treeNode.children.reduce((acc, c) => acc + c.width, 0) + (treeNode.children.length - 1) * GAP_X;
+          const parentCenterX = x + NODE_WIDTH / 2;
+          let startX = parentCenterX - childrenTotalWidth / 2;
+
+          treeNode.children.forEach(child => {
+              const childSubtreeCenterX = startX + child.width / 2;
+              const childNodeX = childSubtreeCenterX - NODE_WIDTH / 2;
+              
+              applyPositions(child, childNodeX, y + NODE_HEIGHT + GAP_Y, layoutType, result);
+              startX += child.width + GAP_X;
+          });
+      }
+      else if (layoutType === 'vertical-up') {
+          const childrenTotalWidth = treeNode.children.reduce((acc, c) => acc + c.width, 0) + (treeNode.children.length - 1) * GAP_X;
+          const parentCenterX = x + NODE_WIDTH / 2;
+          let startX = parentCenterX - childrenTotalWidth / 2;
+
+          treeNode.children.forEach(child => {
+              const childSubtreeCenterX = startX + child.width / 2;
+              const childNodeX = childSubtreeCenterX - NODE_WIDTH / 2;
+              
+              applyPositions(child, childNodeX, y - (NODE_HEIGHT + GAP_Y), layoutType, result);
+              startX += child.width + GAP_X;
+          });
+      }
+      else if (layoutType === 'vertical-stack') {
+          let currentY = y + NODE_HEIGHT + GAP_Y / 2;
+          treeNode.children.forEach(child => {
+              applyPositions(child, x, currentY, layoutType, result);
+              currentY += child.height + GAP_Y / 2;
+          });
+      }
+  }, []);
+
+  const runLayout = useCallback((rootNode: Node, allNodes: Node[], allEdges: Edge[]): Node[] => {
+      const layoutType = rootNode.data.layoutType as LayoutDirection;
+      if (!layoutType) return allNodes;
+
+      // 1. Build the tree (Measure phase)
+      const treeRoot = buildLayoutTree(rootNode.id, layoutType, allNodes, allEdges, new Set());
+      if (!treeRoot) return allNodes;
+
+      // 2. Calculate positions (Position phase)
+      const newPositions = new Map<string, {x: number, y: number}>();
+      applyPositions(treeRoot, rootNode.position.x, rootNode.position.y, layoutType, newPositions);
+
+      // 3. Update nodes
+      return allNodes.map(n => {
+          if (newPositions.has(n.id)) {
+              const pos = newPositions.get(n.id)!;
+              // If it's the root, we keep it draggable. If it's a child, we lock it.
+              const isRoot = n.id === rootNode.id;
+              return { 
+                  ...n, 
+                  position: pos,
+                  draggable: isRoot, // Only root is draggable
+                  className: isRoot ? '' : '!cursor-default', // Visual cue
+                  // Ensure style doesn't conflict
+                  style: isRoot ? {} : { pointerEvents: 'all' } 
+              };
+          }
+          return n;
+      });
+
+  }, [buildLayoutTree, applyPositions]);
 
   const applyLayout = useCallback((rootNodeId: string, layoutType: LayoutDirection) => {
     setNodes((currentNodes) => {
-        const nodesMap = new Map(currentNodes.map(n => [n.id, {...n}])); // Deepish copy
-        const root = nodesMap.get(rootNodeId);
+        const root = currentNodes.find(n => n.id === rootNodeId);
         if (!root) return currentNodes;
 
-        // Apply layout flag to root
-        root.data = { ...root.data, layoutType };
-
-        // Helper to get nodes array from map for calculation
-        const getNodesArray = () => Array.from(nodesMap.values());
+        // Update root with new layout type
+        const updatedRoot = { ...root, data: { ...root.data, layoutType } };
+        const otherNodes = currentNodes.map(n => n.id === rootNodeId ? updatedRoot : n);
         
-        // Calculate and apply positions recursively
-        calculateLayout(rootNodeId, layoutType, getNodesArray(), edges, new Set());
-
-        // Lock children
-        const updateLocks = (nodeId: string, visited = new Set<string>()) => {
-             if (visited.has(nodeId)) return;
-             visited.add(nodeId);
-             
-             const childEdges = edges.filter(e => e.source === nodeId);
-             childEdges.forEach(e => {
-                 const child = nodesMap.get(e.target);
-                 if (child) {
-                     child.draggable = false; // Lock position
-                     // Inherit or keep own layout
-                     const dir = child.data.layoutType || layoutType; // This logic is slightly loose, simplified for demo
-                     updateLocks(child.id, visited);
-                 }
-             });
-        };
-        updateLocks(rootNodeId);
-
-        return Array.from(nodesMap.values());
+        // Run layout engine
+        return runLayout(updatedRoot, otherNodes, edges);
     });
-  }, [edges, calculateLayout, setNodes]);
+  }, [edges, runLayout, setNodes]);
 
   const clearLayout = useCallback((nodeId: string) => {
       setNodes(nds => {
-          const newNodes = nds.map(n => {
-              if (n.id === nodeId) {
-                  const { layoutType, ...rest } = n.data;
-                  return { ...n, data: rest };
-              }
-              return n;
-          });
-          
-          // Unlock children recursively if they don't have their own layout
-          const subtree = getSubtree(nodeId, newNodes, edges);
-          return newNodes.map(n => {
-              if (subtree.includes(n.id) || n.id === nodeId) {
-                  // Check if any parent still enforces layout? 
-                  // For simplicity, we just unlock immediate subtree if we clear layout
-                  // A full check would be expensive. 
-                  return { ...n, draggable: true };
-              }
-              return n;
-          });
+          // 1. Remove layout from target node
+          const nodesMap = new Map(nds.map(n => [n.id, {...n}]));
+          const target = nodesMap.get(nodeId);
+          if (target) {
+              const { layoutType, ...rest } = target.data;
+              target.data = rest;
+              target.draggable = true;
+          }
+
+          // 2. Unlock immediate children (that were previously part of this group)
+          // We need to identify which children were locked by this layout.
+          // A simple BFS/DFS to find connected children that do NOT have their own layout.
+          const stack = [nodeId];
+          const visited = new Set<string>();
+          while(stack.length > 0) {
+              const curr = stack.pop()!;
+              visited.add(curr);
+              const childEdges = edges.filter(e => e.source === curr);
+              childEdges.forEach(e => {
+                  if (!visited.has(e.target)) {
+                      const child = nodesMap.get(e.target);
+                      if (child && !child.data.layoutType) { // Only traverse if it doesn't have its own layout
+                          child.draggable = true;
+                          stack.push(e.target);
+                      }
+                  }
+              });
+          }
+
+          return Array.from(nodesMap.values());
       });
-  }, [edges, getSubtree, setNodes]);
+  }, [edges, setNodes]);
 
 
   // --- Event Handlers ---
@@ -339,20 +318,21 @@ const WhiteboardInner: React.FC<WhiteboardProps> = ({ file, onSave, onNodeClick 
 
   const onKeyDown = useCallback((event: React.KeyboardEvent) => {
     if (event.key === 'Tab') {
-      const currentNodes = getNodes();
+      const currentNodes = getNodes(); // Get latest nodes from ReactFlow instance
       const selectedNodes = currentNodes.filter(n => n.selected);
 
       if (selectedNodes.length === 1) {
         event.preventDefault();
         const parent = selectedNodes[0];
+        
+        // Find the effective layout root for the parent to determine where to place child?
+        // Or just use parent's active layout.
         const parentLayout = parent.data.layoutType;
         
         const newId = `node_${Date.now()}`;
         
-        // Determine position based on layout
-        let position = { x: parent.position.x + 200, y: parent.position.y };
-        if (parentLayout === 'vertical-down') position = { x: parent.position.x, y: parent.position.y + 100 };
-        // ... simple heuristics for initial placement, actual layout calc handles it later
+        // Initial position (will be fixed by layout engine immediately if layout is active)
+        const position = { x: parent.position.x + 200, y: parent.position.y };
 
         const childNode: Node = {
           id: newId,
@@ -360,7 +340,7 @@ const WhiteboardInner: React.FC<WhiteboardProps> = ({ file, onSave, onNodeClick 
           position,
           data: { label: 'New Node', note: '' },
           selected: true,
-          draggable: !parentLayout // Lock if parent has layout
+          draggable: !parentLayout 
         };
 
         const newEdge: Edge = {
@@ -371,15 +351,30 @@ const WhiteboardInner: React.FC<WhiteboardProps> = ({ file, onSave, onNodeClick 
           animated: true
         };
 
-        setNodes((nds) => [...nds.map(n => ({...n, selected: false})), childNode]);
+        // We need to add the node/edge AND run layout if applicable
+        setNodes((nds) => {
+            const updatedNodes = [...nds.map(n => ({...n, selected: false})), childNode];
+            if (parentLayout) {
+                // If parent has layout, run it immediately on the updated set
+                // We need to create a temp array because 'edges' state isn't updated yet inside this callback
+                // But we can't see the new edge yet.
+                // Solution: use useEffect or run layout in the next tick? 
+                // Alternatively, pass the new edge to runLayout explicitly.
+                // For simplicity, we'll let the onNodeDrag logic or a separate effect handle re-layout, 
+                // BUT to prevent jump, we try to run it here.
+                // Actually, runLayout needs edges.
+                return updatedNodes;
+            }
+            return updatedNodes;
+        });
+
         setEdges((eds) => {
             const newEdges = addEdge(newEdge, eds);
-            // If parent has layout, re-apply it after a short delay or immediately?
-            // Immediate might miss the new node in state. 
-            // We'll rely on effect or manual trigger.
-            // For now, let's just add it. The user can drag parent to re-layout or we trigger it.
+            // Trigger layout update after state update
             if (parentLayout) {
-                 setTimeout(() => applyLayout(parent.id, parentLayout), 10);
+               // We can't call setNodes inside setEdges safely if they depend on each other.
+               // We will use a timeout to trigger re-layout
+               setTimeout(() => applyLayout(parent.id, parentLayout as LayoutDirection), 0);
             }
             return newEdges;
         });
@@ -404,24 +399,23 @@ const WhiteboardInner: React.FC<WhiteboardProps> = ({ file, onSave, onNodeClick 
   }, []);
 
   const onNodeDrag: NodeDragHandler = useCallback((event, node) => {
-      // If node has a layout, we must move its children with it relatively
-      // Actually ReactFlow handles subgraph movement if using parent/child feature (extent), 
-      // but here we are using flat nodes with computed positions.
-      // If we move a parent, we want to re-run layout or just shift children?
-      // Re-running layout is safest to keep structure.
+      // Rule 1 & 5: Parent moves, children move.
+      // If the dragged node has a layout, we must re-calculate the positions of its children relative to its NEW position.
       if (node.data.layoutType) {
-          applyLayout(node.id, node.data.layoutType);
+          // Use the dragged node's current position (from event/param) as the anchor
+          setNodes(currentNodes => {
+             // Replace the old node in the list with the dragged node (which has updated position)
+             // ReactFlow updates position internally but we need to pass the updated list to runLayout
+             const updatedNodes = currentNodes.map(n => n.id === node.id ? node : n);
+             return runLayout(node, updatedNodes, edges);
+          });
       }
-  }, [applyLayout]);
+  }, [edges, runLayout, setNodes]);
 
   const onPaneClick = useCallback((event: React.MouseEvent) => {
-      // Close context menu
       setContextMenu(null);
-
-      // Double click detection
       const currentTime = Date.now();
       if (currentTime - lastPaneClickTimeRef.current < 300) {
-          // Double click detected
           const position = screenToFlowPosition({
               x: event.clientX,
               y: event.clientY,
