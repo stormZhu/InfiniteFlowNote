@@ -20,7 +20,11 @@ import {
   X,
   Network,
   PanelLeftClose,
-  PanelLeftOpen
+  PanelLeftOpen,
+  ArrowRight,
+  ArrowLeft,
+  ArrowDown,
+  ArrowUp
 } from 'lucide-react';
 
 export { 
@@ -40,10 +44,14 @@ export {
   Italic, 
   List, 
   Heading1, 
-  Heading2,
+  Heading2, 
   FileText,
   X,
   Network,
   PanelLeftClose,
-  PanelLeftOpen
+  PanelLeftOpen,
+  ArrowRight,
+  ArrowLeft,
+  ArrowDown,
+  ArrowUp
 };

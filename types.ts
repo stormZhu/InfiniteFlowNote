@@ -7,6 +7,8 @@ export interface Folder {
   isOpen?: boolean;
 }
 
+export type LayoutDirection = 'horizontal-right' | 'horizontal-left' | 'vertical-down' | 'vertical-up' | 'vertical-stack';
+
 export interface WhiteboardFile {
   id: string;
   name: string;
@@ -21,6 +23,7 @@ export interface WhiteboardFile {
 export interface NodeData {
   label: string;
   note?: string; // HTML content for the rich text note
+  layoutType?: LayoutDirection;
 }
 
 export type FileSystemItem = Folder | WhiteboardFile;
